@@ -3,6 +3,7 @@
 #include <FS.h>
 #include <LittleFS.h>
 #include <PString.h>
+#include <type_traits>
 //#include <LITTLEFS.h>
 //#define FILESYSTEM LittleFS
 //#define SPIFFS LITTLEFS
@@ -17,14 +18,14 @@
 
 // Test "options" values
 uint8_t ledPin = LED_BUILTIN;
-bool boolVar = true;
+bool inputpullup;
 uint32_t longVar = 1234567890;
 float floatVar = 15.5F;
 String stringVar = "Test option String";
 
 // Var labels (in /setup webpage)
 #define LED_LABEL "The LED pin number"
-#define BOOL_LABEL "A bool variable"
+#define BOOL_LABEL "Input pullup"
 #define LONG_LABEL "A long variable"
 #define FLOAT_LABEL "A float variable"
 #define STRING_LABEL "A String variable"
@@ -64,7 +65,7 @@ function reload() {
   });
 }
 )EOF";
-
+volatile uint8_t inputmode;
 
 ////////////////////////////////  Filesystem  /////////////////////////////////////////
 void startFilesystem() {
@@ -122,6 +123,7 @@ volatile unsigned long dirPulse = 0ul;      // Time capture of direction pulse
 volatile unsigned long speedTime = 0ul;     // Time between speed pulses (microseconds)
 volatile unsigned long directionTime = 0ul; // Time between direction pulses (microseconds)
 volatile boolean newData = false;           // New speed pulse received
+volatile boolean timeout_expired = false;
 volatile unsigned long lastUpdate = 0ul;    // Time of last serial output
 
 volatile int knotsOut = 0;    // Wind speed output in knots * 100
@@ -129,6 +131,8 @@ volatile int dirOut = 0;      // Direction output in degrees
 volatile boolean ignoreNextReading = false;
 
 boolean debug = false;
+
+hw_timer_t *timeout_timer;
 
 // fine costanti e definizioni per funzioni applicative
 
@@ -149,6 +153,11 @@ void IRAM_ATTR readWindSpeed()
         newData = true;
         speedPulse = micros();    // Capture time of the new speed pulse
     }
+}
+
+void IRAM_ATTR timerINT ()
+{
+  timeout_expired = true;
 }
 
 boolean checkSpeedDev(long knots, int dev)
@@ -373,30 +382,41 @@ void calcWindSpeedAndDir()
     }
 }
 ////////////////////  Load application options from filesystem  ////////////////////
+template <typename T>
+inline void printOption (const char *label, const char *frm, T var )
+{
+  String etichetta;
+  etichetta= String(label) + String(frm);
+  const char *formato = etichetta.c_str();
+  Serial.printf(formato, var);
+}
 bool loadOptions() {
+  //using std::string;
+  String etichetta;
   if (FILESYSTEM.exists("/config.json")) {
     myWebServer.getOptionValue(LED_LABEL, ledPin);
-    myWebServer.getOptionValue(BOOL_LABEL, boolVar);
+    myWebServer.getOptionValue(BOOL_LABEL, inputpullup);
     myWebServer.getOptionValue(LONG_LABEL, longVar);
     myWebServer.getOptionValue(FLOAT_LABEL, floatVar);
     myWebServer.getOptionValue(STRING_LABEL, stringVar);
 
     Serial.println();
-    Serial.printf("LED pin value: %d\n", ledPin);
-    Serial.printf("Bool value: %d\n", boolVar);
-    Serial.printf("Long value: %ld\n",longVar);
-    Serial.printf("Float value: %d.%d\n", (int)floatVar, (int)(floatVar*1000)%1000);
-    Serial.println(stringVar);
+    printOption ( LED_LABEL, ": %d\n", ledPin);
+    printOption ( BOOL_LABEL, ": %s\n", (inputpullup ? "true" : "false"));
+    printOption ( LONG_LABEL, ": %d\n", longVar);
+    printOption ( FLOAT_LABEL, ": %6.1f\n", floatVar);
+    printOption ( STRING_LABEL, ": %s\n", stringVar.c_str());
     return true;
   }
   else
+    //inputpullup = true;
     Serial.println(F("File \"config.json\" not exist"));
   return false;
 }
 
 void saveOptions() {
   myWebServer.saveOptionValue(LED_LABEL, ledPin);
-  myWebServer.saveOptionValue(BOOL_LABEL, boolVar);
+  myWebServer.saveOptionValue(BOOL_LABEL, inputpullup);
   myWebServer.saveOptionValue(LONG_LABEL, longVar);
   myWebServer.saveOptionValue(FLOAT_LABEL, floatVar);
   myWebServer.saveOptionValue(STRING_LABEL, stringVar);
@@ -413,24 +433,8 @@ void handleLoadOptions() {
 
 
 void setup() {
-  // setup funzioni applicative
-  pinMode(LED, OUTPUT);
-  randomSeed (millis()); //serve solo per la 'finta' direzione del vento (casuale)
-  Serial.begin(115200, SERIAL_8N1); // provvisorio per output su console 
-                                    //da portare a 38400 0 4800 quando sarà utilizzata seriale definitiva
-  //Serial.println(VERSION);
-  Serial.print("Direction Filter: ");
-  Serial.println(filterGain);
-  pinMode(windSpeedPin, INPUT);
-  attachInterrupt(windSpeedINT, readWindSpeed, FALLING);
-  /*pinMode(windDirPin, INPUT);
-  attachInterrupt(windDirINT, readWindDir, FALLING); non serve per sensore sine/cosine VDO/Stowe MHU - per Peet-Bros*/
-
-  interrupts();
-
-  // Fine setup funzioni applicative
-
-  //Serial.begin(115200);
+  
+  Serial.begin(115200, SERIAL_8N1);
   pinMode(BTN_SAVE, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -455,7 +459,7 @@ void setup() {
   myWebServer.addOption(LONG_LABEL, longVar);
   myWebServer.addOption(FLOAT_LABEL, floatVar, 0.0, 100.0, 0.01);
   myWebServer.addOption(STRING_LABEL, stringVar);
-  myWebServer.addOption(BOOL_LABEL, boolVar);
+  myWebServer.addOption(BOOL_LABEL, inputpullup);
   myWebServer.addOption("raw-html-button", save_btn_htm);
   myWebServer.addJavascript(button_script);
 
@@ -466,6 +470,34 @@ void setup() {
     Serial.println(F("Open /edit page to view and edit files"));
     Serial.println(F("Open /update page to upload firmware and filesystem updates"));
   }
+
+  // setup funzioni applicative
+  if (inputpullup) 
+  {
+    inputmode = INPUT_PULLUP;
+  }
+  else 
+  {
+    inputmode = INPUT;
+  }
+  pinMode(LED, OUTPUT);
+  randomSeed (millis()); //serve solo per la 'finta' direzione del vento (casuale)
+  //Serial.begin(115200, SERIAL_8N1); // provvisorio per output su console 
+                                    //da portare a 38400 0 4800 quando sarà utilizzata seriale definitiva
+  //Serial.println(VERSION);
+  Serial.print("Direction Filter: ");
+  Serial.println(filterGain);
+  pinMode(windSpeedPin, inputmode);
+  attachInterrupt(windSpeedPin, readWindSpeed, FALLING);
+  /*pinMode(windDirPin, INPUT);
+  attachInterrupt(windDirINT, readWindDir, FALLING); non serve per sensore sine/cosine VDO/Stowe MHU - per Peet-Bros*/
+  timeout_timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(timeout_timer, &timerINT, true);
+  timerAlarmWrite(timeout_timer, TIMEOUT, true);
+  //interrupts();
+  timerAlarmEnable(timeout_timer);
+  interrupts();
+  // Fine setup funzioni applicative
 }
 
 
@@ -473,24 +505,32 @@ void loop() {
   myWebServer.run();   // webserver in ascolto nell'inner loop
 
   // sezione void loop per funzioni applicative
-  int i;
-  const unsigned int LOOP_DELAY = 50;
-  const unsigned int LOOP_TIME = TIMEOUT / LOOP_DELAY;
+  // int i;
+  // const unsigned int LOOP_DELAY = 50;
+  // const unsigned int LOOP_TIME = TIMEOUT / LOOP_DELAY;
+  if (timeout_expired) {
 
-  digitalWrite(LED, !digitalRead(LED));    // Toggle LED
-
-  i = 0;
-  // If there is new data, process it, otherwise wait for LOOP_TIME to pass
-  while ((newData != true) && (i < LOOP_TIME))
-  {
-    i++;
-    delayMicroseconds(LOOP_DELAY);
-    
+    digitalWrite(LED, !digitalRead(LED));    // Toggle LED
+    timeout_expired = false;
+    calcWindSpeedAndDir();    // only print NMEA if rate expired
   }
+  else {
+    if (newData) {
+      calcWindSpeedAndDir();    // Process new data
+      newData = false;
+    }
+  }
+  // i = 0;
+  // If there is new data, process it, otherwise wait for LOOP_TIME to pass
+  // while ((newData != true) && (i < LOOP_TIME))
+  // {
+  //  i++;
+  //  delayMicroseconds(LOOP_DELAY);
+    
+  // }
 
-  calcWindSpeedAndDir();    // Process new data
-  newData = false;
-  // fine sezione void loop per funzioni applicative
+  // calcWindSpeedAndDir();    // Process new data
+  // newData = false;
 
   if (! digitalRead(BTN_SAVE)) {
     digitalWrite(LED_BUILTIN,HIGH);

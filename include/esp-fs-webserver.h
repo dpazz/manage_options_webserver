@@ -236,8 +236,8 @@ public:
 
     template <typename T>
     bool saveOptionValue(const char *label, T val)
-    {
-        File file = m_filesystem->open("/config.json", "w");
+    {   
+        File file = m_filesystem->open("/config.json", "r+");
         DynamicJsonDocument doc(file.size() * 1.33);
 
         if (file)
@@ -252,13 +252,33 @@ public:
             }
             file.close();
         }
-        else
-            return false;
+        else return false;
 
-        if (doc[label]["value"])
-            doc[label]["value"] = val;
-        else
-            doc[label] = val;
+        if (doc[label]["value"]) 
+            {
+                doc[label]["value"] = T (val) ;
+            }
+        else 
+            /*if ( typeid(val).name = typeid(b).name ) 
+               {
+                if (val) 
+                {
+                    doc[label] ="true";
+                }
+                else 
+                {
+                    doc[label] = "false";
+                }
+               } 
+            else */
+            {
+                doc[label] = T (val) ;
+            }
+        if (serializeJsonPretty(doc, file) == 0)
+            {
+                DebugPrintln(F("Failed to write to file"));
+            }
+        file.close(); 
         return true;
     }
 

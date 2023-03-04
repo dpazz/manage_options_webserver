@@ -1,0 +1,15 @@
+{
+    "param-box1": "Opzioni",
+    "The LED pin number": 2,
+    "A long variable": 1234567890,
+    "A float variable": {
+      "value": 15.5,
+      "min": 0,
+      "max": 100,
+      "step": 0.01
+    },
+    "A String variable": "Test option String",
+    "Input pullup": true,
+    "raw-html-button": "\n<div class=\"btn-bar\">\n  <a class=\"btn\" onclick=\"reload();\">Ricarica le opzioni</a>\n</div>\n",
+    "raw-javascript-hidden": "\nfunction reload() {\n  console.log('Ricarica dei parametri di configurazione');\n  fetch('/reload')\n  .then((response) => {\n    if (response.ok) {\n      openModalMessage('Opzioni ricaricate', 'Le opzioni sono sono state ricaricate dal file di configurazione');\n      return;\n    }\n    throw new Error('Something goes wrong with fetch');\n  })\n  .catch((error) => {\n    openModalMessage('Error', 'Something goes wrong with your request');\n  });\n}\n"
+  }
