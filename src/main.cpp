@@ -3,11 +3,7 @@
 #include <FS.h>
 #include <LittleFS.h>
 #include <PString.h>
-#include <type_traits>
-//#include <LITTLEFS.h>
-//#define FILESYSTEM LittleFS
-//#define SPIFFS LITTLEFS
-//#define SPIFFS LittleFS
+
 #define FILESYSTEM LittleFS
 
 #ifndef LED_BUILTIN
@@ -19,14 +15,14 @@
 // Test "options" values
 uint8_t ledPin = LED_BUILTIN;
 bool inputpullup;
-uint32_t longVar = 1234567890;
+//uint32_t longVar = 1234567890;
 float floatVar = 15.5F;
 String stringVar = "Test option String";
 
 // Var labels (in /setup webpage)
 #define LED_LABEL "The LED pin number"
-#define BOOL_LABEL "Input pullup"
-#define LONG_LABEL "A long variable"
+#define INPUT_MODE "Input pullup"
+#define TIMEOUT_LABEL "Timeout (millisec.)"
 #define FLOAT_LABEL "A float variable"
 #define STRING_LABEL "A String variable"
 
@@ -65,28 +61,6 @@ function reload() {
   });
 }
 )EOF";
-volatile uint8_t inputmode;
-
-////////////////////////////////  Filesystem  /////////////////////////////////////////
-void startFilesystem() {
-  // FILESYSTEM INIT
-  if ( FILESYSTEM.begin()) {
-    File root = FILESYSTEM.open("/", "w");
-    File file = root.openNextFile();
-    while (file) {
-      const char* fileName = file.name();
-      size_t fileSize = file.size();
-      Serial.printf("FS File: %s, size: %lu\n", fileName, (long unsigned)fileSize);
-      file = root.openNextFile();
-    }
-    Serial.println();
-  }
-  else {
-    Serial.println("ERROR on mounting filesystem. It will be formatted!");
-    FILESYSTEM.format();
-    ESP.restart();
-  }
-}
 
 /* Costanti e definizioni per funzioni applicative
 */
@@ -97,10 +71,10 @@ void startFilesystem() {
 
 // Pin 13 has an LED connected on most Arduino boards.
 int LED = 13;
-
+volatile uint8_t inputmode;
 const unsigned long DEBOUNCE = 10000ul;      // Minimum switch time in microseconds
 const unsigned long DIRECTION_OFFSET = 0ul;  // Manual direction offset in degrees, if required
-const unsigned long TIMEOUT = 1500000ul;       // Maximum time allowed between speed pulses in microseconds
+/*const*/ unsigned long TIMEOUT = 1500ul;       // Maximum time allowed between speed pulses in millisec.
 const unsigned long UPDATE_RATE = 500ul;     // How often to send out NMEA data in milliseconds
 const float filterGain = 0.25;               // Filter gain on direction output filter. Range: 0.0 to 1.0
                                              // 1.0 means no filtering. A smaller number increases the filtering
@@ -135,6 +109,27 @@ boolean debug = false;
 hw_timer_t *timeout_timer;
 
 // fine costanti e definizioni per funzioni applicative
+
+////////////////////////////////  Filesystem  /////////////////////////////////////////
+void startFilesystem() {
+  // FILESYSTEM INIT
+  if ( FILESYSTEM.begin()) {
+    File root = FILESYSTEM.open("/", "w");
+    File file = root.openNextFile();
+    while (file) {
+      const char* fileName = file.name();
+      size_t fileSize = file.size();
+      Serial.printf("FS File: %s, size: %lu\n", fileName, (long unsigned)fileSize);
+      file = root.openNextFile();
+    }
+    Serial.println();
+  }
+  else {
+    Serial.println("ERROR on mounting filesystem. It will be formatted!");
+    FILESYSTEM.format();
+    ESP.restart();
+  }
+}
 
 /*Funzioni applicative
 */
@@ -272,7 +267,7 @@ void calcWindSpeedAndDir()
     interrupts();
 
     // Make speed zero, if the pulse delay is too long
-    if (micros() - speedPulse_ > TIMEOUT) speedTime_ = 0ul;
+    if (micros() - speedPulse_ > TIMEOUT*1000) speedTime_ = 0ul;  // da rivedere se usare un parametro diverso da TIMEOUT
 
     // The following converts revolutions per 100 seconds (rps) to knots x 100
     // This calculation follows the Peet Bros. piecemeal calibration data
@@ -395,15 +390,15 @@ bool loadOptions() {
   String etichetta;
   if (FILESYSTEM.exists("/config.json")) {
     myWebServer.getOptionValue(LED_LABEL, ledPin);
-    myWebServer.getOptionValue(BOOL_LABEL, inputpullup);
-    myWebServer.getOptionValue(LONG_LABEL, longVar);
+    myWebServer.getOptionValue(INPUT_MODE, inputpullup);
+    myWebServer.getOptionValue(TIMEOUT_LABEL, TIMEOUT); //stored in millisec. used in microsec.
     myWebServer.getOptionValue(FLOAT_LABEL, floatVar);
     myWebServer.getOptionValue(STRING_LABEL, stringVar);
 
     Serial.println();
     printOption ( LED_LABEL, ": %d\n", ledPin);
-    printOption ( BOOL_LABEL, ": %s\n", (inputpullup ? "true" : "false"));
-    printOption ( LONG_LABEL, ": %d\n", longVar);
+    printOption ( INPUT_MODE, ": %s\n", (inputpullup ? "true" : "false"));
+    printOption ( TIMEOUT_LABEL, ": %d\n", TIMEOUT);
     printOption ( FLOAT_LABEL, ": %6.1f\n", floatVar);
     printOption ( STRING_LABEL, ": %s\n", stringVar.c_str());
     return true;
@@ -416,8 +411,9 @@ bool loadOptions() {
 
 void saveOptions() {
   myWebServer.saveOptionValue(LED_LABEL, ledPin);
-  myWebServer.saveOptionValue(BOOL_LABEL, inputpullup);
-  myWebServer.saveOptionValue(LONG_LABEL, longVar);
+  myWebServer.saveOptionValue(INPUT_MODE, inputpullup);
+  //TIMEOUT /= 1000; //stored in millisec. used in microsec.
+  myWebServer.saveOptionValue(TIMEOUT_LABEL, TIMEOUT);
   myWebServer.saveOptionValue(FLOAT_LABEL, floatVar);
   myWebServer.saveOptionValue(STRING_LABEL, stringVar);
   Serial.println(F("Application options saved."));
@@ -456,10 +452,10 @@ void setup() {
   // Configure /setup page and start Web Server
   myWebServer.addOptionBox("Opzioni");
   myWebServer.addOption(LED_LABEL, ledPin);
-  myWebServer.addOption(LONG_LABEL, longVar);
+  myWebServer.addOption(TIMEOUT_LABEL, TIMEOUT);
   myWebServer.addOption(FLOAT_LABEL, floatVar, 0.0, 100.0, 0.01);
   myWebServer.addOption(STRING_LABEL, stringVar);
-  myWebServer.addOption(BOOL_LABEL, inputpullup);
+  myWebServer.addOption(INPUT_MODE, inputpullup);
   myWebServer.addOption("raw-html-button", save_btn_htm);
   myWebServer.addJavascript(button_script);
 
@@ -493,7 +489,7 @@ void setup() {
   attachInterrupt(windDirINT, readWindDir, FALLING); non serve per sensore sine/cosine VDO/Stowe MHU - per Peet-Bros*/
   timeout_timer = timerBegin(0, 80, true);
   timerAttachInterrupt(timeout_timer, &timerINT, true);
-  timerAlarmWrite(timeout_timer, TIMEOUT, true);
+  timerAlarmWrite(timeout_timer, TIMEOUT*1000, true);  //TIMEOUT stored in millisec. used in microsec.
   //interrupts();
   timerAlarmEnable(timeout_timer);
   interrupts();
